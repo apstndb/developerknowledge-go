@@ -72,6 +72,17 @@ func TestDocumentURIIsNotOmittedFromJSON(t *testing.T) {
 	}
 }
 
+func TestDefaultCredentialsPathUsesCloudSDKConfig(t *testing.T) {
+	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+	t.Setenv("CLOUDSDK_CONFIG", "/tmp/custom-gcloud")
+
+	got := DefaultCredentialsPath()
+	want := "/tmp/custom-gcloud/application_default_credentials.json"
+	if got != want {
+		t.Fatalf("DefaultCredentialsPath() = %q, want %q", got, want)
+	}
+}
+
 func TestParseRetryAfterHTTPDate(t *testing.T) {
 	t.Parallel()
 

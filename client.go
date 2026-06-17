@@ -115,6 +115,9 @@ func DefaultCredentialsPath() string {
 	if path := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS"); path != "" {
 		return path
 	}
+	if path := os.Getenv("CLOUDSDK_CONFIG"); path != "" {
+		return filepath.Join(path, "application_default_credentials.json")
+	}
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		homeDir = ""
