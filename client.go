@@ -176,7 +176,7 @@ func (t *QuotaProjectTransport) RoundTrip(req *http.Request) (*http.Response, er
 
 type Document struct {
 	Name        string `json:"name" yaml:"name"`
-	URI         string `json:"uri,omitempty" yaml:"uri,omitempty"`
+	URI         string `json:"uri" yaml:"uri"`
 	Content     string `json:"content,omitempty" yaml:"content,omitempty"`
 	Description string `json:"description,omitempty" yaml:"description,omitempty"`
 	DataSource  string `json:"dataSource,omitempty" yaml:"data_source,omitempty"`
@@ -228,7 +228,15 @@ func ParseRetryAfter(resp *http.Response) time.Duration {
 	if secs, err := strconv.Atoi(v); err == nil {
 		return time.Duration(secs) * time.Second
 	}
-	return 0
+	t, err := http.ParseTime(v)
+	if err != nil {
+		return 0
+	}
+	wait := time.Until(t)
+	if wait < 0 {
+		return 0
+	}
+	return wait
 }
 
 func CheckResponse(resp *http.Response) ([]byte, error) {
@@ -242,7 +250,7 @@ func CheckResponse(resp *http.Response) ([]byte, error) {
 		return nil, &RateLimitError{RetryAfter: ParseRetryAfter(resp)}
 	}
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		var apiErr struct {
 			Error struct {
 				Code    int    `json:"code"`
@@ -271,7 +279,8 @@ type Client struct {
 	Limiter       Waiter
 	Verbose       bool
 	VerboseWriter io.Writer
-	MaxRetries    int
+	// MaxRetries is the number of additional attempts after the first request.
+	MaxRetries int
 }
 
 func (c *Client) requestContext() context.Context {
@@ -288,11 +297,11 @@ func (c *Client) httpClient() *http.Client {
 	return http.DefaultClient
 }
 
-func (c *Client) maxRetries() int {
-	if c.MaxRetries > 0 {
-		return c.MaxRetries
+func (c *Client) maxAttempts() int {
+	if c.MaxRetries < 0 {
+		return 1
 	}
-	return 1
+	return c.MaxRetries + 1
 }
 
 func (c *Client) baseURL() string {
@@ -312,10 +321,10 @@ func (c *Client) verboseWriter() io.Writer {
 func (c *Client) DoAPIRequest(method, reqURL string, body []byte, contentType string) ([]byte, error) {
 	backoff := time.Second
 	ctx := c.requestContext()
-	maxRetries := c.maxRetries()
+	maxAttempts := c.maxAttempts()
 	var retryErr error
 
-	for attempt := 0; attempt < maxRetries; attempt++ {
+	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if c.Limiter != nil {
 			if err := c.Limiter.Wait(ctx); err != nil {
 				return nil, err
@@ -355,7 +364,7 @@ func (c *Client) DoAPIRequest(method, reqURL string, body []byte, contentType st
 		var rlErr *RateLimitError
 		if errors.As(err, &rlErr) {
 			retryErr = err
-			if attempt == maxRetries-1 {
+			if attempt == maxAttempts-1 {
 				break
 			}
 			wait := backoff
