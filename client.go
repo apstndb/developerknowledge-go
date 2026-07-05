@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -30,6 +31,12 @@ const (
 	MaxBatchGetDocuments = 20
 	// maxErrorBodyBytes caps how much of a non-2xx response body is read for errors.
 	maxErrorBodyBytes = 1 << 20
+	// defaultInitialRetryBackoff is the first retry wait when Retry-After is absent.
+	defaultInitialRetryBackoff = time.Second
+	// defaultMaxRetryBackoff caps exponential backoff between retry attempts.
+	defaultMaxRetryBackoff = 30 * time.Second
+	// defaultMaxRetryAfter caps Retry-After header values.
+	defaultMaxRetryAfter = 60 * time.Second
 )
 
 type AuthMode int
@@ -336,6 +343,12 @@ type Client struct {
 	VerboseWriter io.Writer
 	// MaxRetries is the number of additional attempts after the first request.
 	MaxRetries int
+	// MaxRetryBackoff caps exponential backoff between retries. Zero uses defaultMaxRetryBackoff.
+	MaxRetryBackoff time.Duration
+	// MaxRetryAfter caps Retry-After header values. Zero uses defaultMaxRetryAfter.
+	MaxRetryAfter time.Duration
+	// MaxRetryElapsed limits total time spent retrying. Zero means no limit.
+	MaxRetryElapsed time.Duration
 }
 
 func (c *Client) httpClient() *http.Client {
@@ -366,12 +379,80 @@ func (c *Client) verboseWriter() io.Writer {
 	return os.Stderr
 }
 
+func (c *Client) maxRetryBackoff() time.Duration {
+	if c.MaxRetryBackoff > 0 {
+		return c.MaxRetryBackoff
+	}
+	return defaultMaxRetryBackoff
+}
+
+func (c *Client) maxRetryAfter() time.Duration {
+	if c.MaxRetryAfter > 0 {
+		return c.MaxRetryAfter
+	}
+	return defaultMaxRetryAfter
+}
+
+func isRetryableStatus(code int) bool {
+	switch code {
+	case http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+func capDuration(d, max time.Duration) time.Duration {
+	if max > 0 && d > max {
+		return max
+	}
+	return d
+}
+
+// retryWaitDuration picks a wait before the next attempt using Retry-After when
+// present and otherwise exponential backoff with jitter.
+func retryWaitDuration(backoff, retryAfter, maxBackoff time.Duration) time.Duration {
+	wait := backoff
+	if retryAfter > 0 {
+		wait = retryAfter
+	}
+	wait = capDuration(wait, maxBackoff)
+	if wait <= 0 {
+		return 0
+	}
+	// Jitter in [0.75, 1.25] to reduce synchronized retries.
+	factor := 0.75 + rand.Float64()*0.5
+	return capDuration(time.Duration(float64(wait)*factor), maxBackoff)
+}
+
+func (c *Client) sleepBeforeRetry(ctx context.Context, backoff, retryAfter time.Duration, nextBackoff *time.Duration) error {
+	wait := retryWaitDuration(backoff, retryAfter, c.maxRetryBackoff())
+	if c.Verbose && wait > 0 {
+		_, _ = fmt.Fprintf(c.verboseWriter(), "Retrying after %v...\n", wait)
+	}
+	if err := SleepContext(ctx, wait); err != nil {
+		return err
+	}
+	*nextBackoff = capDuration(backoff*2, c.maxRetryBackoff())
+	return nil
+}
+
+func discardResponseBody(resp *http.Response) {
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxErrorBodyBytes))
+	_ = resp.Body.Close()
+}
+
 func (c *Client) DoAPIRequest(ctx context.Context, method, reqURL string, body []byte, contentType string) ([]byte, error) {
-	backoff := time.Second
+	backoff := defaultInitialRetryBackoff
 	maxAttempts := c.maxAttempts()
-	var retryErr error
+	var lastErr error
+	retryStart := time.Now()
 
 	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if c.MaxRetryElapsed > 0 && attempt > 0 && time.Since(retryStart) >= c.MaxRetryElapsed {
+			break
+		}
+
 		if c.Limiter != nil {
 			if err := c.Limiter.Wait(ctx); err != nil {
 				return nil, err
@@ -395,7 +476,17 @@ func (c *Client) DoAPIRequest(ctx context.Context, method, reqURL string, body [
 
 		resp, err := c.httpClient().Do(req)
 		if err != nil {
-			return nil, err
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			lastErr = err
+			if attempt == maxAttempts-1 {
+				return nil, err
+			}
+			if err := c.sleepBeforeRetry(ctx, backoff, 0, &backoff); err != nil {
+				return nil, err
+			}
+			continue
 		}
 
 		if c.Verbose {
@@ -403,29 +494,27 @@ func (c *Client) DoAPIRequest(ctx context.Context, method, reqURL string, body [
 			_, _ = fmt.Fprintf(c.verboseWriter(), "%s", dump)
 		}
 
-		respBody, err := CheckResponse(resp)
-		var rlErr *RateLimitError
-		if errors.As(err, &rlErr) {
-			retryErr = err
+		if isRetryableStatus(resp.StatusCode) {
+			retryAfter := time.Duration(0)
+			if resp.StatusCode == http.StatusTooManyRequests {
+				retryAfter = capDuration(ParseRetryAfter(resp), c.maxRetryAfter())
+				lastErr = &RateLimitError{RetryAfter: retryAfter}
+			} else {
+				lastErr = &APIError{Code: resp.StatusCode, Message: http.StatusText(resp.StatusCode)}
+			}
+			discardResponseBody(resp)
 			if attempt == maxAttempts-1 {
 				break
 			}
-			wait := backoff
-			if rlErr.RetryAfter > 0 {
-				wait = rlErr.RetryAfter
-			}
-			if c.Verbose {
-				_, _ = fmt.Fprintf(c.verboseWriter(), "Rate limited, retrying after %v...\n", wait)
-			}
-			if err := SleepContext(ctx, wait); err != nil {
+			if err := c.sleepBeforeRetry(ctx, backoff, retryAfter, &backoff); err != nil {
 				return nil, err
 			}
-			backoff *= 2
 			continue
 		}
-		return respBody, err
+
+		return CheckResponse(resp)
 	}
-	return nil, retryErr
+	return nil, lastErr
 }
 
 func (c *Client) DoGet(ctx context.Context, reqURL string) ([]byte, error) {
