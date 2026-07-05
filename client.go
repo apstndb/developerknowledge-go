@@ -25,6 +25,11 @@ const (
 	CloudPlatformScope = "https://www.googleapis.com/auth/cloud-platform"
 	DefaultV1BaseURL   = "https://developerknowledge.googleapis.com/v1"
 	DefaultHTTPTimeout = time.Minute
+	// MaxBatchGetDocuments is the maximum number of document names accepted by
+	// documents:batchGet. Documents are returned in the same order as names.
+	MaxBatchGetDocuments = 20
+	// maxErrorBodyBytes caps how much of a non-2xx response body is read for errors.
+	maxErrorBodyBytes = 1 << 20
 )
 
 type AuthMode int
@@ -76,12 +81,55 @@ func NewAuthenticatedHTTPClient(ctx context.Context, cfg AuthConfig) (*http.Clie
 	return client, "", nil
 }
 
-func NewADCHTTPClient(ctx context.Context, cfg AuthConfig) (*http.Client, error) {
-	tokenSource := cfg.TokenSource
-	if tokenSource == nil {
-		tokenSource = DefaultTokenSource
+func needsQuotaProject(credentialType string) bool {
+	switch credentialType {
+	case "authorized_user", "external_account":
+		return true
+	default:
+		return false
 	}
-	ts, err := tokenSource(ctx, CloudPlatformScope)
+}
+
+func credentialsPath(cfg AuthConfig) string {
+	if cfg.CredentialsPath != nil {
+		return cfg.CredentialsPath()
+	}
+	return DefaultCredentialsPath()
+}
+
+func tokenSourceFromCredentialsFile(ctx context.Context, path string) (oauth2.TokenSource, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	creds, err := google.CredentialsFromJSON(ctx, data, CloudPlatformScope)
+	if err != nil {
+		return nil, err
+	}
+	return creds.TokenSource, nil
+}
+
+func adcTokenSource(ctx context.Context, path string) (oauth2.TokenSource, error) {
+	if os.Getenv("GOOGLE_APPLICATION_CREDENTIALS") != "" || os.Getenv("CLOUDSDK_CONFIG") != "" {
+		return tokenSourceFromCredentialsFile(ctx, path)
+	}
+	if _, err := os.Stat(path); err == nil {
+		return tokenSourceFromCredentialsFile(ctx, path)
+	}
+	return DefaultTokenSource(ctx, CloudPlatformScope)
+}
+
+func NewADCHTTPClient(ctx context.Context, cfg AuthConfig) (*http.Client, error) {
+	var ts oauth2.TokenSource
+	var err error
+
+	if cfg.TokenSource != nil {
+		ts, err = cfg.TokenSource(ctx, CloudPlatformScope)
+	} else if path := credentialsPath(cfg); path != "" {
+		ts, err = adcTokenSource(ctx, path)
+	} else {
+		ts, err = DefaultTokenSource(ctx, CloudPlatformScope)
+	}
 	if err != nil {
 		if cfg.Mode == AuthPreferAPIKey {
 			return nil, fmt.Errorf("set DEVELOPERKNOWLEDGE_API_KEY or GOOGLE_API_KEY, or configure ADC with 'gcloud auth application-default login': %w", err)
@@ -95,7 +143,7 @@ func NewADCHTTPClient(ctx context.Context, cfg AuthConfig) (*http.Client, error)
 	}
 
 	quotaProject, metadata := ResolveQuotaProjectID(cfg.CredentialsPath)
-	if quotaProject == "" && metadata.Type == "authorized_user" {
+	if quotaProject == "" && needsQuotaProject(metadata.Type) {
 		return nil, fmt.Errorf("ADC requires a quota project; run 'gcloud auth application-default set-quota-project <project-id>' or set GOOGLE_CLOUD_QUOTA_PROJECT")
 	}
 	if quotaProject != "" {
@@ -184,8 +232,9 @@ type Document struct {
 	Description string `json:"description,omitempty" yaml:"description,omitempty"`
 	DataSource  string `json:"dataSource,omitempty" yaml:"data_source,omitempty"`
 	Title       string `json:"title,omitempty" yaml:"title,omitempty"`
-	UpdateTime  string `json:"updateTime,omitempty" yaml:"update_time,omitempty"`
-	View        string `json:"view,omitempty" yaml:"view,omitempty"`
+	UpdateTime         string `json:"updateTime,omitempty" yaml:"update_time,omitempty"`
+	View               string `json:"view,omitempty" yaml:"view,omitempty"`
+	ContentLengthBytes int64  `json:"contentLengthBytes,omitempty" yaml:"content_length_bytes,omitempty"`
 }
 
 type DocumentChunk struct {
@@ -243,8 +292,12 @@ func ParseRetryAfter(resp *http.Response) time.Duration {
 }
 
 func CheckResponse(resp *http.Response) ([]byte, error) {
-	body, err := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	reader := io.Reader(resp.Body)
+	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		reader = io.LimitReader(resp.Body, maxErrorBodyBytes)
+	}
+	body, err := io.ReadAll(reader)
+	_ = resp.Body.Close()
 	if err != nil {
 		return nil, err
 	}
@@ -278,19 +331,11 @@ type Client struct {
 	BaseURL       string
 	APIKey        string
 	HTTPClient    *http.Client
-	Context       context.Context
 	Limiter       Waiter
 	Verbose       bool
 	VerboseWriter io.Writer
 	// MaxRetries is the number of additional attempts after the first request.
 	MaxRetries int
-}
-
-func (c *Client) requestContext() context.Context {
-	if c.Context != nil {
-		return c.Context
-	}
-	return context.Background()
 }
 
 func (c *Client) httpClient() *http.Client {
@@ -321,9 +366,8 @@ func (c *Client) verboseWriter() io.Writer {
 	return os.Stderr
 }
 
-func (c *Client) DoAPIRequest(method, reqURL string, body []byte, contentType string) ([]byte, error) {
+func (c *Client) DoAPIRequest(ctx context.Context, method, reqURL string, body []byte, contentType string) ([]byte, error) {
 	backoff := time.Second
-	ctx := c.requestContext()
 	maxAttempts := c.maxAttempts()
 	var retryErr error
 
@@ -351,16 +395,12 @@ func (c *Client) DoAPIRequest(method, reqURL string, body []byte, contentType st
 
 		resp, err := c.httpClient().Do(req)
 		if err != nil {
-			if resp != nil && resp.Body != nil {
-				_, _ = io.Copy(io.Discard, resp.Body)
-				resp.Body.Close()
-			}
 			return nil, err
 		}
 
 		if c.Verbose {
 			dump, _ := httputil.DumpResponse(resp, false)
-			fmt.Fprintf(c.verboseWriter(), "%s", dump)
+			_, _ = fmt.Fprintf(c.verboseWriter(), "%s", dump)
 		}
 
 		respBody, err := CheckResponse(resp)
@@ -375,7 +415,7 @@ func (c *Client) DoAPIRequest(method, reqURL string, body []byte, contentType st
 				wait = rlErr.RetryAfter
 			}
 			if c.Verbose {
-				fmt.Fprintf(c.verboseWriter(), "Rate limited, retrying after %v...\n", wait)
+				_, _ = fmt.Fprintf(c.verboseWriter(), "Rate limited, retrying after %v...\n", wait)
 			}
 			if err := SleepContext(ctx, wait); err != nil {
 				return nil, err
@@ -388,21 +428,28 @@ func (c *Client) DoAPIRequest(method, reqURL string, body []byte, contentType st
 	return nil, retryErr
 }
 
-func (c *Client) DoGet(reqURL string) ([]byte, error) {
-	return c.DoAPIRequest(http.MethodGet, reqURL, nil, "")
+func (c *Client) DoGet(ctx context.Context, reqURL string) ([]byte, error) {
+	return c.DoAPIRequest(ctx, http.MethodGet, reqURL, nil, "")
 }
 
-func (c *Client) DoJSONPost(reqURL string, body []byte) ([]byte, error) {
-	return c.DoAPIRequest(http.MethodPost, reqURL, body, "application/json")
+func (c *Client) DoJSONPost(ctx context.Context, reqURL string, body []byte) ([]byte, error) {
+	return c.DoAPIRequest(ctx, http.MethodPost, reqURL, body, "application/json")
 }
 
-func (c *Client) BatchGetDocuments(names []string) ([]Document, error) {
+func (c *Client) BatchGetDocuments(ctx context.Context, names []string) ([]Document, error) {
+	if len(names) == 0 {
+		return nil, fmt.Errorf("batchGet requires at least one document name")
+	}
+	if len(names) > MaxBatchGetDocuments {
+		return nil, fmt.Errorf("batchGet accepts at most %d document names, got %d", MaxBatchGetDocuments, len(names))
+	}
+
 	params := url.Values{}
 	for _, name := range names {
 		params.Add("names", name)
 	}
 
-	body, err := c.DoGet(c.baseURL() + "/documents:batchGet?" + params.Encode())
+	body, err := c.DoGet(ctx, c.baseURL()+"/documents:batchGet?"+params.Encode())
 	if err != nil {
 		return nil, err
 	}
@@ -414,9 +461,62 @@ func (c *Client) BatchGetDocuments(names []string) ([]Document, error) {
 	return resp.Documents, nil
 }
 
+// BatchGetDocumentsAll fetches documents in chunks of MaxBatchGetDocuments while
+// preserving the order of names. Invalid names fail the whole batch for that chunk.
+func (c *Client) BatchGetDocumentsAll(ctx context.Context, names []string) ([]Document, error) {
+	if len(names) == 0 {
+		return nil, fmt.Errorf("batchGet requires at least one document name")
+	}
+
+	docs := make([]Document, 0, len(names))
+	for start := 0; start < len(names); start += MaxBatchGetDocuments {
+		end := start + MaxBatchGetDocuments
+		if end > len(names) {
+			end = len(names)
+		}
+		chunk, err := c.BatchGetDocuments(ctx, names[start:end])
+		if err != nil {
+			return nil, err
+		}
+		docs = append(docs, chunk...)
+	}
+	return docs, nil
+}
+
+// NormalizeDocName converts a pasted URL or short document path into a Developer
+// Knowledge API resource name (documents/...). Query strings, fragments, and
+// trailing slashes are stripped.
 func NormalizeDocName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "documents/"
+	}
+
+	if strings.Contains(name, "://") {
+		u, err := url.Parse(name)
+		if err == nil && u.Host != "" {
+			path := strings.TrimPrefix(u.Path, "/")
+			resource := u.Host
+			if path != "" {
+				resource += "/" + path
+			}
+			if strings.HasPrefix(resource, "documents/") {
+				return resource
+			}
+			return "documents/" + resource
+		}
+	}
+
 	name = strings.TrimPrefix(name, "https://")
 	name = strings.TrimPrefix(name, "http://")
+	name = strings.TrimPrefix(name, "HTTPS://")
+	name = strings.TrimPrefix(name, "HTTP://")
+
+	if i := strings.IndexAny(name, "?#"); i >= 0 {
+		name = name[:i]
+	}
+	name = strings.TrimSuffix(name, "/")
+
 	if !strings.HasPrefix(name, "documents/") {
 		name = "documents/" + name
 	}
