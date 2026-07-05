@@ -9,9 +9,8 @@ linters:
     - govet
     - staticcheck
     - unused
-
-issues:
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - errcheck
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
