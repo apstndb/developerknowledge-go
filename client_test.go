@@ -273,6 +273,82 @@ func TestDoAPIRequestRetryExhaustionReturnsRateLimitError(t *testing.T) {
 	}
 }
 
+func TestDoAPIRequestRetriesServiceUnavailable(t *testing.T) {
+	t.Parallel()
+
+	attempts := 0
+	client := &Client{
+		MaxRetries: 1,
+		HTTPClient: &http.Client{
+			Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+				attempts++
+				if attempts == 1 {
+					return &http.Response{
+						StatusCode: http.StatusServiceUnavailable,
+						Body:       io.NopCloser(strings.NewReader("")),
+					}, nil
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader("ok")),
+				}, nil
+			}),
+		},
+	}
+
+	body, err := client.DoGet(context.Background(), "https://example.test/v1/documents/example.com/a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "ok" {
+		t.Fatalf("body = %q, want ok", body)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
+	}
+}
+
+func TestDoAPIRequestRetriesTransportError(t *testing.T) {
+	t.Parallel()
+
+	attempts := 0
+	client := &Client{
+		MaxRetries: 1,
+		HTTPClient: &http.Client{
+			Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+				attempts++
+				if attempts == 1 {
+					return nil, errors.New("connection reset")
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader("ok")),
+				}, nil
+			}),
+		},
+	}
+
+	body, err := client.DoGet(context.Background(), "https://example.test/v1/documents/example.com/a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "ok" {
+		t.Fatalf("body = %q, want ok", body)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
+	}
+}
+
+func TestRetryWaitDurationCapsRetryAfter(t *testing.T) {
+	t.Parallel()
+
+	got := retryWaitDuration(time.Second, 2*time.Minute, defaultMaxRetryBackoff)
+	if got > defaultMaxRetryBackoff {
+		t.Fatalf("wait = %v, want <= %v", got, defaultMaxRetryBackoff)
+	}
+}
+
 func TestIsBisectableDocumentError(t *testing.T) {
 	t.Parallel()
 
