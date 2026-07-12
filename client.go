@@ -610,6 +610,9 @@ func validateRequestOrigin(req *http.Request, origin *url.URL) error {
 	if req == nil || req.URL == nil {
 		return errors.New("request URL is nil")
 	}
+	if origin == nil {
+		return errors.New("origin URL is nil")
+	}
 	if err := validateHTTPURL(req.URL); err != nil {
 		return fmt.Errorf("invalid request URL: %w", err)
 	}

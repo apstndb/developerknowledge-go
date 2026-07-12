@@ -596,6 +596,38 @@ func TestOriginGuardTransportClosesRejectedRequestBody(t *testing.T) {
 	}
 }
 
+func TestOriginGuardTransportRejectsNilOrigin(t *testing.T) {
+	t.Parallel()
+
+	transportCalled := false
+	guard := &originGuardTransport{
+		Base: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+			transportCalled = true
+			return nil, errors.New("unexpected request")
+		}),
+	}
+	body := &closeTrackingBody{}
+	req, err := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		"https://allowed.example",
+		body,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := guard.RoundTrip(req); err == nil {
+		t.Fatal("RoundTrip() error = nil, want nil-origin error")
+	}
+	if transportCalled {
+		t.Fatal("base transport was called for nil origin")
+	}
+	if got := body.closed.Load(); got != 1 {
+		t.Fatalf("request body Close calls = %d, want 1", got)
+	}
+}
+
 func TestOriginGuardTransportRejectsMutatedRequestAuthority(t *testing.T) {
 	t.Parallel()
 
