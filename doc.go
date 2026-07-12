@@ -7,6 +7,8 @@
 // spanner-mycli.
 //
 // Authentication supports API keys (DEVELOPERKNOWLEDGE_API_KEY or GOOGLE_API_KEY)
-// and Application Default Credentials. When CLOUDSDK_CONFIG is set, both token
-// and quota-project metadata are read from that directory's ADC file.
+// and Application Default Credentials. When CLOUDSDK_CONFIG is set, its ADC
+// file provides both token and quota-project metadata when present. If that
+// optional file is absent, standard ADC discovery continues; other path or
+// read errors are returned.
 package dkapi
