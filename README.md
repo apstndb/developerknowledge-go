@@ -9,6 +9,7 @@ This module provides shared primitives used by Developer Knowledge API clients:
 - Google API error parsing with bounded error-body reads
 - rate limit error handling and `Retry-After` parsing
 - context-aware HTTP request helpers
+- typed v1 `AnswerQuery` support, including citations and document references
 - `documents:batchGet` support with chunking via `BatchGetDocumentsAll`
 - shared `Document` and `DocumentChunk` response types
 - conservative batch bisection error classification
