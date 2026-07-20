@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -124,25 +125,55 @@ func TestBatchGetDocumentsRejectsTooManyNames(t *testing.T) {
 	t.Parallel()
 
 	client := &Client{}
-	names := make([]string, MaxBatchGetDocuments+1)
+	names := make([]string, 21)
 	for i := range names {
 		names[i] = "documents/example.com/a"
 	}
 	_, err := client.BatchGetDocuments(context.Background(), names)
 	if err == nil {
-		t.Fatal("expected error for too many names")
+		t.Fatal("expected error for 21 names")
+	}
+	if !strings.Contains(err.Error(), "at most 20 document names, got 21") {
+		t.Fatalf("error = %q", err)
+	}
+}
+
+func TestBatchGetDocumentsAccepts20Names(t *testing.T) {
+	t.Parallel()
+
+	client := &Client{
+		BaseURL: "https://example.test/v1",
+		HTTPClient: &http.Client{
+			Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+				if got := len(req.URL.Query()["names"]); got != 20 {
+					t.Fatalf("len(names) = %d, want 20", got)
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"documents":[]}`)),
+				}, nil
+			}),
+		},
+	}
+
+	names := make([]string, 20)
+	for i := range names {
+		names[i] = "documents/example.com/a"
+	}
+	if _, err := client.BatchGetDocuments(context.Background(), names); err != nil {
+		t.Fatal(err)
 	}
 }
 
 func TestBatchGetDocumentsAllChunks(t *testing.T) {
 	t.Parallel()
 
-	calls := 0
+	var chunkSizes []int
 	client := &Client{
 		BaseURL: "https://example.test/v1",
 		HTTPClient: &http.Client{
 			Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
-				calls++
+				chunkSizes = append(chunkSizes, len(req.URL.Query()["names"]))
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Body:       io.NopCloser(strings.NewReader(`{"documents":[{"name":"documents/example.com/a","content":"A"}]}`)),
@@ -151,7 +182,7 @@ func TestBatchGetDocumentsAllChunks(t *testing.T) {
 		},
 	}
 
-	names := make([]string, MaxBatchGetDocuments+1)
+	names := make([]string, 41)
 	for i := range names {
 		names[i] = "documents/example.com/a"
 	}
@@ -159,11 +190,11 @@ func TestBatchGetDocumentsAllChunks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(docs) != 2 {
-		t.Fatalf("len(docs) = %d, want 2", len(docs))
+	if len(docs) != 3 {
+		t.Fatalf("len(docs) = %d, want 3", len(docs))
 	}
-	if calls != 2 {
-		t.Fatalf("calls = %d, want 2", calls)
+	if got, want := chunkSizes, []int{20, 20, 1}; !slices.Equal(got, want) {
+		t.Fatalf("chunk sizes = %v, want %v", got, want)
 	}
 }
 

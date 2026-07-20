@@ -27,7 +27,9 @@ const (
 	DefaultV1BaseURL   = "https://developerknowledge.googleapis.com/v1"
 	DefaultHTTPTimeout = time.Minute
 	// MaxBatchGetDocuments is the maximum number of document names accepted by
-	// documents:batchGet. Documents are returned in the same order as names.
+	// documents:batchGet. The live v1 and v1alpha APIs rejected 21 names as
+	// INVALID_ARGUMENT on 2026-07-18, despite the how-to page stating 100.
+	// Documents are returned in the same order as names.
 	MaxBatchGetDocuments = 20
 	// maxErrorBodyBytes caps how much of a non-2xx response body is read for errors.
 	maxErrorBodyBytes = 1 << 20
@@ -758,28 +760,7 @@ func (c *Client) DoJSONPost(ctx context.Context, reqURL string, body []byte) ([]
 }
 
 func (c *Client) BatchGetDocuments(ctx context.Context, names []string) ([]Document, error) {
-	if len(names) == 0 {
-		return nil, fmt.Errorf("batchGet requires at least one document name")
-	}
-	if len(names) > MaxBatchGetDocuments {
-		return nil, fmt.Errorf("batchGet accepts at most %d document names, got %d", MaxBatchGetDocuments, len(names))
-	}
-
-	params := url.Values{}
-	for _, name := range names {
-		params.Add("names", name)
-	}
-
-	body, err := c.DoGet(ctx, c.baseURL()+"/documents:batchGet?"+params.Encode())
-	if err != nil {
-		return nil, err
-	}
-
-	var resp BatchGetResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, err
-	}
-	return resp.Documents, nil
+	return c.batchGetDocuments(ctx, names, batchGetConfig{})
 }
 
 // BatchGetDocumentsAll fetches documents in chunks of MaxBatchGetDocuments while
