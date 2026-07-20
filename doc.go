@@ -11,4 +11,11 @@
 // file provides both token and quota-project metadata when present. If that
 // optional file is absent, standard ADC discovery continues; other path or
 // read errors are returned.
+//
+// # Partial batch retrieval
+//
+// BatchGetDocumentsPartial chunks large input lists and bisects
+// document-specific failures while preserving input order and duplicate names.
+// WithDocumentView can request metadata-only results. A fatal batch-level error
+// stops later requests but returns the positional results completed before it.
 package dkapi
