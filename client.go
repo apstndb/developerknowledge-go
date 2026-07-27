@@ -369,12 +369,12 @@ func (t *QuotaProjectTransport) CloseIdleConnections() {
 }
 
 type Document struct {
-	Name        string `json:"name" yaml:"name"`
-	URI         string `json:"uri" yaml:"uri"`
-	Content     string `json:"content,omitempty" yaml:"content,omitempty"`
-	Description string `json:"description,omitempty" yaml:"description,omitempty"`
-	DataSource  string `json:"dataSource,omitempty" yaml:"data_source,omitempty"`
-	Title       string `json:"title,omitempty" yaml:"title,omitempty"`
+	Name               string `json:"name" yaml:"name"`
+	URI                string `json:"uri" yaml:"uri"`
+	Content            string `json:"content,omitempty" yaml:"content,omitempty"`
+	Description        string `json:"description,omitempty" yaml:"description,omitempty"`
+	DataSource         string `json:"dataSource,omitempty" yaml:"data_source,omitempty"`
+	Title              string `json:"title,omitempty" yaml:"title,omitempty"`
 	UpdateTime         string `json:"updateTime,omitempty" yaml:"update_time,omitempty"`
 	View               string `json:"view,omitempty" yaml:"view,omitempty"`
 	ContentLengthBytes int64  `json:"contentLengthBytes,omitempty" yaml:"content_length_bytes,omitempty"`
@@ -760,7 +760,7 @@ func (c *Client) DoJSONPost(ctx context.Context, reqURL string, body []byte) ([]
 }
 
 func (c *Client) BatchGetDocuments(ctx context.Context, names []string) ([]Document, error) {
-	return c.batchGetDocuments(ctx, names, batchGetConfig{})
+	return c.batchGetDocuments(ctx, names, documentRequestConfig{})
 }
 
 // BatchGetDocumentsAll fetches documents in chunks of MaxBatchGetDocuments while

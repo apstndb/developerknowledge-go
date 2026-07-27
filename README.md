@@ -10,6 +10,8 @@ This module provides shared primitives used by Developer Knowledge API clients:
 - rate limit error handling and `Retry-After` parsing
 - context-aware HTTP request helpers
 - typed v1 `AnswerQuery` support, including citations and document references
+- typed `GetDocument` with `DocumentView` selection, so metadata-only requests
+  report `contentLengthBytes` without downloading content
 - `documents:batchGet` chunking and positional partial results, including
   metadata-only `DocumentView` requests
 - shared `Document` and `DocumentChunk` response types

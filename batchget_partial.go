@@ -7,40 +7,6 @@ import (
 	"net/url"
 )
 
-// DocumentView selects how much of each Document the API returns.
-type DocumentView string
-
-const (
-	DocumentViewUnspecified DocumentView = "DOCUMENT_VIEW_UNSPECIFIED"
-	DocumentViewBasic       DocumentView = "DOCUMENT_VIEW_BASIC"
-	DocumentViewFull        DocumentView = "DOCUMENT_VIEW_FULL"
-	DocumentViewContent     DocumentView = "DOCUMENT_VIEW_CONTENT"
-)
-
-type batchGetConfig struct {
-	view DocumentView
-}
-
-// BatchGetOption configures BatchGetDocumentsPartial.
-type BatchGetOption func(*batchGetConfig)
-
-// WithDocumentView sets the document view for every batchGet request. Without
-// this option, the server default is DOCUMENT_VIEW_CONTENT.
-func WithDocumentView(view DocumentView) BatchGetOption {
-	return func(cfg *batchGetConfig) {
-		cfg.view = view
-	}
-}
-
-func (v DocumentView) valid() bool {
-	switch v {
-	case "", DocumentViewUnspecified, DocumentViewBasic, DocumentViewFull, DocumentViewContent:
-		return true
-	default:
-		return false
-	}
-}
-
 // BatchGetDocumentResult pairs one input occurrence with its outcome. Name is
 // always populated. Document is set for a returned document, and Err is set for
 // a document-specific failure. Both are nil when a fatal error stopped
@@ -63,25 +29,22 @@ type BatchGetDocumentResult struct {
 func (c *Client) BatchGetDocumentsPartial(
 	ctx context.Context,
 	names []string,
-	opts ...BatchGetOption,
+	opts ...DocumentOption,
 ) ([]BatchGetDocumentResult, error) {
 	if len(names) == 0 {
 		return nil, fmt.Errorf("batchGet requires at least one document name")
 	}
 
-	cfg := batchGetConfig{}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(&cfg)
-		}
-	}
+	cfg := applyDocumentOptions(opts)
 
 	results := make([]BatchGetDocumentResult, len(names))
 	for i, name := range names {
 		results[i].Name = name
 	}
-	if !cfg.view.valid() {
-		return results, fmt.Errorf("invalid document view %q", cfg.view)
+	// Validate after populating names so callers can still correlate every
+	// unprocessed result with its input when an option is invalid.
+	if err := cfg.validate(); err != nil {
+		return results, err
 	}
 
 	for start := 0; start < len(names); start += MaxBatchGetDocuments {
@@ -99,7 +62,7 @@ func (c *Client) fetchBatchGetRange(
 	results []BatchGetDocumentResult,
 	start int,
 	end int,
-	cfg batchGetConfig,
+	cfg documentRequestConfig,
 ) error {
 	docs, err := c.batchGetDocuments(ctx, names[start:end], cfg)
 	if err == nil {
@@ -155,7 +118,7 @@ func assignBatchGetDocuments(
 func (c *Client) batchGetDocuments(
 	ctx context.Context,
 	names []string,
-	cfg batchGetConfig,
+	cfg documentRequestConfig,
 ) ([]Document, error) {
 	if len(names) == 0 {
 		return nil, fmt.Errorf("batchGet requires at least one document name")
@@ -172,9 +135,7 @@ func (c *Client) batchGetDocuments(
 	for _, name := range names {
 		params.Add("names", name)
 	}
-	if cfg.view != "" && cfg.view != DocumentViewUnspecified {
-		params.Set("view", string(cfg.view))
-	}
+	cfg.setQueryParams(params)
 
 	body, err := c.DoGet(ctx, c.baseURL()+"/documents:batchGet?"+params.Encode())
 	if err != nil {
