@@ -36,6 +36,9 @@ func TestAnswerQuery(t *testing.T) {
 		if req.Query != "How do I use the API?" {
 			t.Errorf("query = %q, want How do I use the API?", req.Query)
 		}
+		if req.Filter != `dataSource = "developers.google.com"` {
+			t.Errorf("filter = %q, want developers.google.com data source", req.Filter)
+		}
 
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{
@@ -69,7 +72,10 @@ func TestAnswerQuery(t *testing.T) {
 		APIKey:     "test-key",
 		HTTPClient: server.Client(),
 	}
-	resp, err := client.AnswerQuery(context.Background(), &AnswerQueryRequest{Query: "How do I use the API?"})
+	resp, err := client.AnswerQuery(context.Background(), &AnswerQueryRequest{
+		Query:  "How do I use the API?",
+		Filter: `dataSource = "developers.google.com"`,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
