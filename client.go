@@ -385,6 +385,8 @@ type DocumentChunk struct {
 	ID       string    `json:"id" yaml:"id"`
 	Content  string    `json:"content" yaml:"content"`
 	Document *Document `json:"document,omitempty" yaml:"document,omitempty"`
+	// RelevanceScore is the chunk's relevance to the search query, in the range [0.0, 1.0].
+	RelevanceScore float64 `json:"relevanceScore,omitempty" yaml:"relevance_score,omitempty"`
 }
 
 type BatchGetResponse struct {

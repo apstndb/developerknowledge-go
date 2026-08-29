@@ -51,6 +51,7 @@ func TestAnswerQuery(t *testing.T) {
         "documentChunk": {
           "parent": "documents/developers.google.com/knowledge/api",
           "content": "Client library documentation",
+          "relevanceScore": 0.875,
           "document": {
             "name": "documents/developers.google.com/knowledge/api",
             "uri": "https://developers.google.com/knowledge/api",
@@ -95,7 +96,12 @@ func TestAnswerQuery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"startIndex":0`, `"referenceIndex":0`} {
+	wantFields := []string{
+		`"startIndex":0`,
+		`"referenceIndex":0`,
+		`"relevanceScore":0.875`,
+	}
+	for _, want := range wantFields {
 		if !strings.Contains(string(encoded), want) {
 			t.Errorf("re-encoded response = %s, want %s", encoded, want)
 		}
@@ -110,6 +116,9 @@ func TestAnswerQuery(t *testing.T) {
 	chunk := ref.DocumentChunk
 	if chunk.ID != "" {
 		t.Errorf("document chunk ID = %q, want empty", chunk.ID)
+	}
+	if chunk.RelevanceScore != 0.875 {
+		t.Errorf("document chunk relevance score = %v, want 0.875", chunk.RelevanceScore)
 	}
 	if chunk.Document == nil || chunk.Document.Title != "Developer Knowledge API" {
 		t.Errorf("document = %#v, want Developer Knowledge API title", chunk.Document)
