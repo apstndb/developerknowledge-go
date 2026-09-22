@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -1004,6 +1005,54 @@ func TestParseRetryAfterHTTPDate(t *testing.T) {
 	got := ParseRetryAfter(resp)
 	if got <= 0 || got > time.Minute {
 		t.Fatalf("ParseRetryAfter() = %v, want a positive duration no greater than 1m", got)
+	}
+}
+
+func TestParseRetryAfterOverflowIsNotNegative(t *testing.T) {
+	t.Parallel()
+
+	resp := &http.Response{Header: make(http.Header)}
+	resp.Header.Set("Retry-After", "9223372037")
+	if got := ParseRetryAfter(resp); got != 0 {
+		t.Fatalf("ParseRetryAfter(overflow) = %v, want 0", got)
+	}
+	resp.Header.Set("Retry-After", "-1")
+	if got := ParseRetryAfter(resp); got != 0 {
+		t.Fatalf("ParseRetryAfter(negative) = %v, want 0", got)
+	}
+	resp.Header.Set("Retry-After", "1")
+	if got := ParseRetryAfter(resp); got != time.Second {
+		t.Fatalf("ParseRetryAfter(1) = %v, want 1s", got)
+	}
+}
+
+func TestDoGetMaxRetriesMaxIntStillRequests(t *testing.T) {
+	t.Parallel()
+
+	calls := 0
+	client := &Client{
+		BaseURL:    "https://example.test/v1",
+		MaxRetries: math.MaxInt,
+		HTTPClient: &http.Client{
+			Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+				calls++
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader("ok")),
+				}, nil
+			}),
+		},
+	}
+
+	body, err := client.DoGet(context.Background(), "https://example.test/v1/documents/example.com/a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "ok" {
+		t.Fatalf("body = %q, want ok", body)
+	}
+	if calls != 1 {
+		t.Fatalf("calls = %d, want 1", calls)
 	}
 }
 
