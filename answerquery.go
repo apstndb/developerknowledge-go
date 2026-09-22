@@ -11,9 +11,16 @@ import (
 type AnswerQueryRequest struct {
 	// Query is the question to answer.
 	Query string `json:"query" yaml:"query"`
-	// Filter restricts the documents used to answer the query. Supported field
-	// names use lower camel case, for example dataSource and contentLengthBytes.
-	// An empty value leaves filtering to the service default.
+	// Filter restricts the documents used to answer the query. Field names use
+	// lower camel case. Examples:
+	//
+	//	dataSource = "docs.cloud.google.com"
+	//	contentLengthBytes < 50000
+	//	updateTime >= "2025-01-22T00:00:00Z"
+	//	uri = "https://docs.cloud.google.com/release-notes"
+	//
+	// An empty value is omitted and leaves filtering to the service default.
+	// The service rejects a filter longer than 500 characters.
 	Filter string `json:"filter,omitempty" yaml:"filter,omitempty"`
 }
 

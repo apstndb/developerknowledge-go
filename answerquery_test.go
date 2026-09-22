@@ -29,8 +29,15 @@ func TestAnswerQuery(t *testing.T) {
 			t.Errorf("x-goog-api-key = %q, want test-key", got)
 		}
 
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request: %v", err)
+		}
+		if !strings.Contains(string(raw), `"filter":"dataSource = \"developers.google.com\""`) {
+			t.Errorf("request JSON = %s, want filter field", raw)
+		}
 		var req AnswerQueryRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := json.Unmarshal(raw, &req); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
 		if req.Query != "How do I use the API?" {
@@ -119,6 +126,31 @@ func TestAnswerQuery(t *testing.T) {
 	}
 	if chunk.Document == nil || chunk.Document.Title != "Developer Knowledge API" {
 		t.Errorf("document = %#v, want Developer Knowledge API title", chunk.Document)
+	}
+}
+
+func TestAnswerQueryOmitsEmptyFilter(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request: %v", err)
+		}
+		if strings.Contains(string(raw), `"filter"`) {
+			t.Errorf("request JSON = %s, want no filter field", raw)
+		}
+		_, _ = io.WriteString(w, `{"answer":{"answerText":"ok"}}`)
+	}))
+	defer server.Close()
+
+	client := &Client{BaseURL: server.URL + "/v1", HTTPClient: server.Client()}
+	resp, err := client.AnswerQuery(context.Background(), &AnswerQueryRequest{Query: "question"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Answer == nil || resp.Answer.AnswerText != "ok" {
+		t.Fatalf("answer = %#v, want ok", resp.Answer)
 	}
 }
 
