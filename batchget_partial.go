@@ -142,9 +142,12 @@ func (c *Client) batchGetDocuments(
 		return nil, err
 	}
 
-	var resp BatchGetResponse
+	var resp *BatchGetResponse
 	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("decode batchGet response: %w", err)
+	}
+	if resp == nil {
+		return nil, fmt.Errorf("decode batchGet response: expected object, got null")
 	}
 	return resp.Documents, nil
 }

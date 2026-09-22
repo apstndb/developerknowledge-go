@@ -325,6 +325,61 @@ func TestBatchGetDocumentsPartialStopsSiblingAfterRecursiveFatalError(t *testing
 	}
 }
 
+func TestBatchGetDocumentsPartialRejectsNullResponse(t *testing.T) {
+	t.Parallel()
+
+	calls := 0
+	client := &Client{
+		BaseURL: "https://example.test/v1",
+		HTTPClient: &http.Client{
+			Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+				calls++
+				return jsonHTTPResponse(http.StatusOK, "null"), nil
+			}),
+		},
+	}
+
+	results, err := client.BatchGetDocumentsPartial(context.Background(), []string{
+		"documents/example.com/a",
+		"documents/example.com/b",
+	})
+	if err == nil || !strings.Contains(err.Error(), "expected object, got null") {
+		t.Fatalf("error = %v, want null object error", err)
+	}
+	if calls != 1 {
+		t.Fatalf("requests = %d, want 1 without bisection", calls)
+	}
+	if len(results) != 2 {
+		t.Fatalf("results = %+v, want two named entries", results)
+	}
+	for i, result := range results {
+		if result.Document != nil || result.Err != nil {
+			t.Fatalf("results[%d] = %+v, want unprocessed result", i, result)
+		}
+	}
+}
+
+func TestBatchGetDocumentsPartialKeepsOmittedDocuments(t *testing.T) {
+	t.Parallel()
+
+	client := &Client{
+		BaseURL: "https://example.test/v1",
+		HTTPClient: &http.Client{
+			Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+				return jsonHTTPResponse(http.StatusOK, `{"documents":[]}`), nil
+			}),
+		},
+	}
+
+	results, err := client.BatchGetDocumentsPartial(context.Background(), []string{"documents/example.com/a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Document != nil || results[0].Err != nil {
+		t.Fatalf("results = %+v, want one omitted result", results)
+	}
+}
+
 func TestBatchGetDocumentsPartialRejectsEmptyNames(t *testing.T) {
 	t.Parallel()
 
