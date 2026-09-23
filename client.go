@@ -439,14 +439,20 @@ func CheckResponse(resp *http.Response) ([]byte, error) {
 	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		reader = io.LimitReader(resp.Body, maxErrorBodyBytes)
 	}
-	body, err := io.ReadAll(reader)
+	body, readErr := io.ReadAll(reader)
 	_ = resp.Body.Close()
-	if err != nil {
-		return nil, err
-	}
-
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return nil, &RateLimitError{RetryAfter: ParseRetryAfter(resp)}
+		// Classify 429 before requiring a complete body. A proxy can close
+		// an overloaded response after the status and Retry-After are known;
+		// dropping those makes the retry loop and errors.As miss the rate limit.
+		rlErr := &RateLimitError{RetryAfter: ParseRetryAfter(resp)}
+		if readErr != nil {
+			return nil, errors.Join(rlErr, readErr)
+		}
+		return nil, rlErr
+	}
+	if readErr != nil {
+		return nil, readErr
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
