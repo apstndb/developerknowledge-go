@@ -11,6 +11,17 @@ import (
 type AnswerQueryRequest struct {
 	// Query is the question to answer.
 	Query string `json:"query" yaml:"query"`
+	// Filter restricts the documents used to answer the query. Field names use
+	// lower camel case. Examples:
+	//
+	//	dataSource = "docs.cloud.google.com"
+	//	contentLengthBytes < 50000
+	//	updateTime >= "2025-01-22T00:00:00Z"
+	//	uri = "https://docs.cloud.google.com/release-notes"
+	//
+	// An empty value is omitted and leaves filtering to the service default.
+	// The service rejects a filter longer than 500 characters.
+	Filter string `json:"filter,omitempty" yaml:"filter,omitempty"`
 }
 
 // AnswerQueryResponse is the response from AnswerQuery.
@@ -53,9 +64,8 @@ type DocumentReference struct {
 }
 
 // AnswerQuery answers a natural-language query using Developer Knowledge
-// content. As of google.golang.org/api v0.289.0, the official generated v1 Go
-// client does not expose this GA operation. See [issue #1] for the long-term
-// relationship with that client.
+// content. See [issue #1] for the long-term relationship with Google's
+// generated Go clients.
 //
 // [issue #1]: https://github.com/apstndb/developerknowledge-go/issues/1
 func (c *Client) AnswerQuery(ctx context.Context, req *AnswerQueryRequest) (*AnswerQueryResponse, error) {
