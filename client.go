@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -415,12 +416,20 @@ func (e *RateLimitError) Error() string {
 	return "rate limited"
 }
 
+// ParseRetryAfter returns the delay from a Retry-After header.
+// A delta-seconds value that is negative or does not fit in a time.Duration
+// returns 0, so callers keep their fallback backoff instead of sleeping for a
+// wrapped negative duration. HTTP-date values in the past also return 0.
 func ParseRetryAfter(resp *http.Response) time.Duration {
 	v := resp.Header.Get("Retry-After")
 	if v == "" {
 		return 0
 	}
-	if secs, err := strconv.Atoi(v); err == nil {
+	if secs, err := strconv.ParseInt(v, 10, 64); err == nil {
+		const maxSeconds = int64(math.MaxInt64 / int64(time.Second))
+		if secs < 0 || secs > maxSeconds {
+			return 0
+		}
 		return time.Duration(secs) * time.Second
 	}
 	t, err := http.ParseTime(v)
@@ -670,6 +679,11 @@ func (c *Client) requestHTTPClient(reqURL string) (*http.Client, error) {
 func (c *Client) maxAttempts() int {
 	if c.MaxRetries < 0 {
 		return 1
+	}
+	// MaxInt+1 wraps to a negative value and the retry loop would skip the
+	// request entirely, returning success with no body.
+	if c.MaxRetries >= math.MaxInt {
+		return math.MaxInt
 	}
 	return c.MaxRetries + 1
 }
