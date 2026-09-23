@@ -65,6 +65,40 @@ func (cfg documentRequestConfig) validate() error {
 	return nil
 }
 
+// escapeDocumentResourceName encodes a resource name for a multi-segment
+// URL path. Slashes remain separators. Bytes outside [-_.~/0-9a-zA-Z] are
+// percent-encoded. An already-encoded slash (%2F or %2f) is copied through
+// unchanged: Google HttpRule decoding of multi-segment path variables does
+// not turn %2F into a separator.
+func escapeDocumentResourceName(name string) string {
+	const hex = "0123456789ABCDEF"
+	var b strings.Builder
+	b.Grow(len(name))
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if isDocumentPathUnescaped(c) {
+			b.WriteByte(c)
+			continue
+		}
+		if c == '%' && i+2 < len(name) && name[i+1] == '2' && (name[i+2] == 'F' || name[i+2] == 'f') {
+			b.WriteString(name[i : i+3])
+			i += 2
+			continue
+		}
+		b.WriteByte('%')
+		b.WriteByte(hex[c>>4])
+		b.WriteByte(hex[c&0x0F])
+	}
+	return b.String()
+}
+
+func isDocumentPathUnescaped(c byte) bool {
+	return c == '/' || c == '-' || c == '_' || c == '.' || c == '~' ||
+		(c >= '0' && c <= '9') ||
+		(c >= 'A' && c <= 'Z') ||
+		(c >= 'a' && c <= 'z')
+}
+
 // setQueryParams adds the configured request parameters to params. An unset or
 // unspecified view is omitted so the server default applies.
 func (cfg documentRequestConfig) setQueryParams(params url.Values) {
@@ -98,7 +132,14 @@ func (c *Client) GetDocument(ctx context.Context, name string, opts ...DocumentO
 		return nil, err
 	}
 
-	reqURL := c.baseURL() + "/" + name
+	// Escape the resource name before concatenating it. A raw append lets the
+	// HTTP client treat %25 in the logical name as a transport escape, so
+	// GetDocument and batchGet request different documents. Multi-segment
+	// HttpRule variables keep %2F encoded; encoding that percent sign would
+	// not match server decoding. url.URL.Path assignment is unsuitable
+	// because URL.String re-encodes Path and drops a RawPath that contains
+	// %2F when it no longer round-trips through Path.
+	reqURL := c.baseURL() + "/" + escapeDocumentResourceName(name)
 	params := url.Values{}
 	cfg.setQueryParams(params)
 	if len(params) > 0 {
