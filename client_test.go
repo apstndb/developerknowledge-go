@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -1007,6 +1008,54 @@ func TestParseRetryAfterHTTPDate(t *testing.T) {
 	}
 }
 
+func TestParseRetryAfterOverflowIsNotNegative(t *testing.T) {
+	t.Parallel()
+
+	resp := &http.Response{Header: make(http.Header)}
+	resp.Header.Set("Retry-After", "9223372037")
+	if got := ParseRetryAfter(resp); got != 0 {
+		t.Fatalf("ParseRetryAfter(overflow) = %v, want 0", got)
+	}
+	resp.Header.Set("Retry-After", "-1")
+	if got := ParseRetryAfter(resp); got != 0 {
+		t.Fatalf("ParseRetryAfter(negative) = %v, want 0", got)
+	}
+	resp.Header.Set("Retry-After", "1")
+	if got := ParseRetryAfter(resp); got != time.Second {
+		t.Fatalf("ParseRetryAfter(1) = %v, want 1s", got)
+	}
+}
+
+func TestDoGetMaxRetriesMaxIntStillRequests(t *testing.T) {
+	t.Parallel()
+
+	calls := 0
+	client := &Client{
+		BaseURL:    "https://example.test/v1",
+		MaxRetries: math.MaxInt,
+		HTTPClient: &http.Client{
+			Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+				calls++
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader("ok")),
+				}, nil
+			}),
+		},
+	}
+
+	body, err := client.DoGet(context.Background(), "https://example.test/v1/documents/example.com/a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "ok" {
+		t.Fatalf("body = %q, want ok", body)
+	}
+	if calls != 1 {
+		t.Fatalf("calls = %d, want 1", calls)
+	}
+}
+
 func TestCheckResponseAcceptsOther2xxStatuses(t *testing.T) {
 	t.Parallel()
 
@@ -1091,6 +1140,68 @@ func TestDoAPIRequestMaxRetriesMeansRetries(t *testing.T) {
 						StatusCode: http.StatusTooManyRequests,
 						Header:     http.Header{"Retry-After": []string{"0"}},
 						Body:       io.NopCloser(strings.NewReader("")),
+					}, nil
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader("ok")),
+				}, nil
+			}),
+		},
+	}
+
+	body, err := client.DoGet(context.Background(), "https://example.test/v1/documents/example.com/a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "ok" {
+		t.Fatalf("body = %q, want ok", body)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
+	}
+}
+
+type shortBody struct{}
+
+func (shortBody) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
+func (shortBody) Close() error             { return nil }
+
+func TestCheckResponseTruncated429KeepsRateLimitError(t *testing.T) {
+	t.Parallel()
+
+	_, err := CheckResponse(&http.Response{
+		StatusCode: http.StatusTooManyRequests,
+		Header:     http.Header{"Retry-After": []string{"1"}},
+		Body:       shortBody{},
+	})
+	var rlErr *RateLimitError
+	if !errors.As(err, &rlErr) {
+		t.Fatalf("error = %T(%v), want *RateLimitError", err, err)
+	}
+	if rlErr.RetryAfter != time.Second {
+		t.Fatalf("RetryAfter = %v, want 1s", rlErr.RetryAfter)
+	}
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("error = %v, want to preserve read failure", err)
+	}
+}
+
+func TestDoGetRetriesTruncated429(t *testing.T) {
+	t.Parallel()
+
+	attempts := 0
+	client := &Client{
+		BaseURL:    "https://example.test/v1",
+		MaxRetries: 1,
+		HTTPClient: &http.Client{
+			Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+				attempts++
+				if attempts == 1 {
+					return &http.Response{
+						StatusCode: http.StatusTooManyRequests,
+						Header:     http.Header{"Retry-After": []string{"0"}},
+						Body:       shortBody{},
 					}, nil
 				}
 				return &http.Response{

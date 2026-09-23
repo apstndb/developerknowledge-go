@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -385,6 +386,10 @@ type DocumentChunk struct {
 	ID       string    `json:"id" yaml:"id"`
 	Content  string    `json:"content" yaml:"content"`
 	Document *Document `json:"document,omitempty" yaml:"document,omitempty"`
+	// RelevanceScore is the chunk's relevance to the search query, in the range [0.0, 1.0].
+	// Zero is also the value when the API omits the field. A zero score is omitted
+	// on encode, so callers cannot distinguish a missing score from an explicit 0.0.
+	RelevanceScore float64 `json:"relevanceScore,omitempty" yaml:"relevance_score,omitempty"`
 }
 
 type BatchGetResponse struct {
@@ -415,12 +420,20 @@ func (e *RateLimitError) Error() string {
 	return "rate limited"
 }
 
+// ParseRetryAfter returns the delay from a Retry-After header.
+// A delta-seconds value that is negative or does not fit in a time.Duration
+// returns 0, so callers keep their fallback backoff instead of sleeping for a
+// wrapped negative duration. HTTP-date values in the past also return 0.
 func ParseRetryAfter(resp *http.Response) time.Duration {
 	v := resp.Header.Get("Retry-After")
 	if v == "" {
 		return 0
 	}
-	if secs, err := strconv.Atoi(v); err == nil {
+	if secs, err := strconv.ParseInt(v, 10, 64); err == nil {
+		const maxSeconds = int64(math.MaxInt64 / int64(time.Second))
+		if secs < 0 || secs > maxSeconds {
+			return 0
+		}
 		return time.Duration(secs) * time.Second
 	}
 	t, err := http.ParseTime(v)
@@ -439,14 +452,20 @@ func CheckResponse(resp *http.Response) ([]byte, error) {
 	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		reader = io.LimitReader(resp.Body, maxErrorBodyBytes)
 	}
-	body, err := io.ReadAll(reader)
+	body, readErr := io.ReadAll(reader)
 	_ = resp.Body.Close()
-	if err != nil {
-		return nil, err
-	}
-
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return nil, &RateLimitError{RetryAfter: ParseRetryAfter(resp)}
+		// Classify 429 before requiring a complete body. A proxy can close
+		// an overloaded response after the status and Retry-After are known;
+		// dropping those makes the retry loop and errors.As miss the rate limit.
+		rlErr := &RateLimitError{RetryAfter: ParseRetryAfter(resp)}
+		if readErr != nil {
+			return nil, errors.Join(rlErr, readErr)
+		}
+		return nil, rlErr
+	}
+	if readErr != nil {
+		return nil, readErr
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -664,6 +683,11 @@ func (c *Client) requestHTTPClient(reqURL string) (*http.Client, error) {
 func (c *Client) maxAttempts() int {
 	if c.MaxRetries < 0 {
 		return 1
+	}
+	// MaxInt+1 wraps to a negative value and the retry loop would skip the
+	// request entirely, returning success with no body.
+	if c.MaxRetries >= math.MaxInt {
+		return math.MaxInt
 	}
 	return c.MaxRetries + 1
 }

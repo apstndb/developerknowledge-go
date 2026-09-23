@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -83,18 +84,92 @@ func TestGetDocumentRequestsDocumentView(t *testing.T) {
 func TestGetDocumentPreservesEscapedResourcePath(t *testing.T) {
 	t.Parallel()
 
+	const name = "documents/example.com/a%2Fb"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got, want := r.URL.EscapedPath(), "/v1/documents/example.com/a%2Fb"; got != want {
 			t.Errorf("escaped path = %q, want %q", got, want)
+		}
+		if got := transcodingResourceName(r.URL.EscapedPath()); got != name {
+			t.Errorf("transcoded name = %q, want %q", got, name)
 		}
 		_, _ = io.WriteString(w, `{"name":"documents/example.com/a%2Fb"}`)
 	}))
 	defer server.Close()
 
 	client := &Client{BaseURL: server.URL + "/v1", HTTPClient: server.Client()}
-	if _, err := client.GetDocument(context.Background(), "documents/example.com/a%2Fb"); err != nil {
+	if _, err := client.GetDocument(context.Background(), name); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestGetDocumentEncodesReservedPathBytes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		escaped string
+	}{
+		{
+			name:    "documents/example.com/discount%25guide",
+			escaped: "/v1/documents/example.com/discount%2525guide",
+		},
+		{
+			name:    "documents/example.com/price%23tag",
+			escaped: "/v1/documents/example.com/price%2523tag",
+		},
+		{
+			name:    "documents/example.com/a/b",
+			escaped: "/v1/documents/example.com/a/b",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if got := r.URL.EscapedPath(); got != tt.escaped {
+					t.Errorf("escaped path = %q, want %q", got, tt.escaped)
+				}
+				if got := transcodingResourceName(r.URL.EscapedPath()); got != tt.name {
+					t.Errorf("transcoded name = %q, want %q", got, tt.name)
+				}
+				_, _ = io.WriteString(w, `{"name":"ok"}`)
+			}))
+			defer server.Close()
+
+			client := &Client{BaseURL: server.URL + "/v1", HTTPClient: server.Client()}
+			if _, err := client.GetDocument(context.Background(), tt.name); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+// transcodingResourceName decodes a request path the way a multi-segment
+// HttpRule variable does: ordinary percent-escapes decode, but %2F stays an
+// encoded slash instead of becoming a separator. Go's r.URL.Path decodes %2F,
+// so it is not the logical resource name.
+func transcodingResourceName(escapedPath string) string {
+	escapedPath = strings.TrimPrefix(escapedPath, "/v1/")
+	var b strings.Builder
+	for i := 0; i < len(escapedPath); i++ {
+		if escapedPath[i] == '%' && i+2 < len(escapedPath) {
+			hex := escapedPath[i+1 : i+3]
+			if strings.EqualFold(hex, "2F") {
+				b.WriteString(escapedPath[i : i+3])
+				i += 2
+				continue
+			}
+			v, err := strconv.ParseUint(hex, 16, 8)
+			if err == nil {
+				b.WriteByte(byte(v))
+				i += 2
+				continue
+			}
+		}
+		b.WriteByte(escapedPath[i])
+	}
+	return b.String()
 }
 
 func TestGetDocumentOmitsUnspecifiedView(t *testing.T) {
