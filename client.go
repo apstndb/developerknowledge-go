@@ -386,6 +386,10 @@ type DocumentChunk struct {
 	ID       string    `json:"id" yaml:"id"`
 	Content  string    `json:"content" yaml:"content"`
 	Document *Document `json:"document,omitempty" yaml:"document,omitempty"`
+	// RelevanceScore is the chunk's relevance to the search query, in the range [0.0, 1.0].
+	// Zero is also the value when the API omits the field. A zero score is omitted
+	// on encode, so callers cannot distinguish a missing score from an explicit 0.0.
+	RelevanceScore float64 `json:"relevanceScore,omitempty" yaml:"relevance_score,omitempty"`
 }
 
 type BatchGetResponse struct {

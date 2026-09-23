@@ -51,6 +51,7 @@ func TestAnswerQuery(t *testing.T) {
         "documentChunk": {
           "parent": "documents/developers.google.com/knowledge/api",
           "content": "Client library documentation",
+          "relevanceScore": 0.875,
           "document": {
             "name": "documents/developers.google.com/knowledge/api",
             "uri": "https://developers.google.com/knowledge/api",
@@ -95,7 +96,12 @@ func TestAnswerQuery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"startIndex":0`, `"referenceIndex":0`} {
+	wantFields := []string{
+		`"startIndex":0`,
+		`"referenceIndex":0`,
+		`"relevanceScore":0.875`,
+	}
+	for _, want := range wantFields {
 		if !strings.Contains(string(encoded), want) {
 			t.Errorf("re-encoded response = %s, want %s", encoded, want)
 		}
@@ -111,8 +117,39 @@ func TestAnswerQuery(t *testing.T) {
 	if chunk.ID != "" {
 		t.Errorf("document chunk ID = %q, want empty", chunk.ID)
 	}
+	if chunk.RelevanceScore != 0.875 {
+		t.Errorf("document chunk relevance score = %v, want 0.875", chunk.RelevanceScore)
+	}
 	if chunk.Document == nil || chunk.Document.Title != "Developer Knowledge API" {
 		t.Errorf("document = %#v, want Developer Knowledge API title", chunk.Document)
+	}
+}
+
+func TestDocumentChunkRelevanceScoreZeroSerialization(t *testing.T) {
+	t.Parallel()
+
+	var missing DocumentChunk
+	if err := json.Unmarshal([]byte(`{"parent":"documents/example.com/a"}`), &missing); err != nil {
+		t.Fatal(err)
+	}
+	if missing.RelevanceScore != 0 {
+		t.Fatalf("omitted relevance score = %v, want 0", missing.RelevanceScore)
+	}
+
+	encoded, err := json.Marshal(DocumentChunk{Parent: "documents/example.com/a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "relevanceScore") {
+		t.Fatalf("encoded zero relevance score = %s, want the field omitted", encoded)
+	}
+
+	var explicit DocumentChunk
+	if err := json.Unmarshal([]byte(`{"relevanceScore":0}`), &explicit); err != nil {
+		t.Fatal(err)
+	}
+	if explicit.RelevanceScore != 0 {
+		t.Fatalf("explicit zero relevance score = %v, want 0", explicit.RelevanceScore)
 	}
 }
 
