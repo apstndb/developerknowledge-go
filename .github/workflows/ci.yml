@@ -35,9 +35,19 @@ jobs:
         with:
           version: v2.1.6
 
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v6
+        with:
+          # Keep compatibility tests above, but scan with a supported, patched Go.
+          go-version: '1.27'
+          check-latest: true
+          cache: true
+
       - name: govulncheck
-        if: matrix.go-version == '1.25'
         run: |
-          # v1.7.0 supports Go 1.25; v1.8.0 requires Go 1.26.
-          go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+          go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
           govulncheck ./...
