@@ -12,11 +12,11 @@ type AnswerQueryRequest struct {
 	// Query is the question to answer.
 	Query string `json:"query" yaml:"query"`
 	// Filter restricts the documents used to answer the query. Field names use
-	// lower camel case. Examples:
+	// snake_case, independently of the JSON field names. Examples:
 	//
-	//	dataSource = "docs.cloud.google.com"
-	//	contentLengthBytes < 50000
-	//	updateTime >= "2025-01-22T00:00:00Z"
+	//	data_source = "docs.cloud.google.com"
+	//	content_length_bytes < 50000
+	//	update_time >= "2025-01-22T00:00:00Z"
 	//	uri = "https://docs.cloud.google.com/release-notes"
 	//
 	// An empty value is omitted and leaves filtering to the service default.

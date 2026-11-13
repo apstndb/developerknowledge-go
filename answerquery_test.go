@@ -33,7 +33,7 @@ func TestAnswerQuery(t *testing.T) {
 		if err != nil {
 			t.Errorf("read request: %v", err)
 		}
-		if !strings.Contains(string(raw), `"filter":"dataSource = \"developers.google.com\""`) {
+		if !strings.Contains(string(raw), `"filter":"data_source = \"developers.google.com\""`) {
 			t.Errorf("request JSON = %s, want filter field", raw)
 		}
 		var req AnswerQueryRequest
@@ -43,7 +43,7 @@ func TestAnswerQuery(t *testing.T) {
 		if req.Query != "How do I use the API?" {
 			t.Errorf("query = %q, want How do I use the API?", req.Query)
 		}
-		if req.Filter != `dataSource = "developers.google.com"` {
+		if req.Filter != `data_source = "developers.google.com"` {
 			t.Errorf("filter = %q, want developers.google.com data source", req.Filter)
 		}
 
@@ -82,7 +82,7 @@ func TestAnswerQuery(t *testing.T) {
 	}
 	resp, err := client.AnswerQuery(context.Background(), &AnswerQueryRequest{
 		Query:  "How do I use the API?",
-		Filter: `dataSource = "developers.google.com"`,
+		Filter: `data_source = "developers.google.com"`,
 	})
 	if err != nil {
 		t.Fatal(err)
